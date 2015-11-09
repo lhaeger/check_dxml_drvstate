@@ -22,8 +22,9 @@
 #		    heartbeat monitoring
 # v1.5, 2008-08-26, added -Z parameter to ldapsearchs
 #                   improved TAO filesize determination for various "ls -l" output styles 
+# v1.6, 2008-09-01, fixed wrong $TAODIR for Edir 8.8x
 
-VERSION="1.5, 2008-08-26"
+VERSION="1.6, 2008-09-01"
 
 PROGNAME=`/bin/basename $0`
 PROGPATH=`echo $0 | /bin/sed -e 's,[\\/][^\\/][^\\/]*$,,'`
@@ -193,7 +194,7 @@ if [ -x "/usr/bin/dxcmd" ]; then
   TAODIR="/var/nds/dib"
 elif [ -x "/opt/novell/eDirectory/bin/dxcmd" ]; then
   DXCMD="/opt/novell/eDirectory/bin/dxcmd"
-  TAODIR="/var/opt/novell/eDirectory/$TREE/TAO"
+  TAODIR="/var/opt/novell/eDirectory/$TREE/dib"
 else
   DXCMD="dxcmd"
   TAOWARNING=
