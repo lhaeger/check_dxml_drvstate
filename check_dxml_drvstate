@@ -2,6 +2,7 @@
 
 # nagios script to determine the state of a dirxml driver
 # copyright (c) Lothar Haeger (lothar.haeger@steria-mummert.de)
+# v1.1, 2007-05-21
 
 PROGNAME=`/bin/basename $0`
 PROGPATH=`echo $0 | /bin/sed -e 's,[\\/][^\\/][^\\/]*$,,'`
@@ -14,6 +15,7 @@ STATE_DEPENDENT=4
 
 #DXCMD="/usr/bin/dxcmd"
 DXCMD="dxcmd"
+DXERR="/tmp/dxcmd_error"
 
 print_help() {
     echo "Novell DirXML 1.1 and Identity Manager 2.x/3.x driver state detector plugin for Nagios"
@@ -66,9 +68,11 @@ while test -n "$1"; do
 done
 
 if [ "$server" == "" ]; then
-   dxcmd_output=`$DXCMD -user $username -password $password -getstate $driverdn 2>&1`
+#   dxcmd_output=`$DXCMD -user $username -password $password -getstate $driverdn 2>&1`
+   dxcmd_output=`$DXCMD -user $username -password $password -getstate $driverdn 2>$DXERR`
 else
-   dxcmd_output=`$DXCMD -host $server -user $username -password $password -getstate $driverdn 2>&1`
+#   dxcmd_output=`$DXCMD -host $server -user $username -password $password -getstate $driverdn 2>&1`
+   dxcmd_output=`$DXCMD -host $server -user $username -password $password -getstate $driverdn 2>$DXERR`
 fi
 
 dxml_drvstate=$?
@@ -77,7 +81,7 @@ dxml_drvstate=$?
 
 case $dxml_drvstate in
     0)	#stopped
-	echo "Driver $driverdn is STOPPED (or does not exist)."
+	echo "Driver $driverdn is STOPPED."
         exit $STATE_CRITICAL
         ;;
     1) 	#starting
@@ -92,10 +96,24 @@ case $dxml_drvstate in
 	echo "Driver $driverdn is STOPPING..."
         exit $STATE_WARNING
         ;;
-    *)	#error
-	echo "An ERROR occured trying to determine the state of driver $driverdn."
-	echo "$dxcmd_output"
-	echo "Driver State: $dxml_drvstate"
+   11)	#getting schema
+	echo "Driver $driverdn is GETTING the application SCHEMA..."
+        exit $STATE_OK
+        ;;
+   96)	#access forbidden
+	echo "Driver $driverdn could not be checked because $username is NOT AUTHORIZED to do so. "
+        exit $STATE_CRITICAL
+        ;;
+  167)	#does not exist
+	echo "Driver $driverdn DOES NOT EXIST."
+        exit $STATE_CRITICAL
+        ;;
+  255)	#generic error
+	echo "Driver $driverdn could not be ckecked due to an UNKNOWN ERROR (`egrep 'xception' $DXERR`)."
+        exit $STATE_CRITICAL
+        ;;
+    *)	#other dxcmd error
+	echo "Driver $driverdn could not be ckecked due to an UNKNOWN ERROR (Error code $dxml_drvstate)"
         exit $STATE_CRITICAL
         ;;
 esac
