@@ -1,0 +1,103 @@
+#! /bin/sh
+
+# nagios script to determine the state of a dirxml driver
+# copyright (c) Lothar Haeger (lothar.haeger@steria-mummert.de)
+
+PROGNAME=`/bin/basename $0`
+PROGPATH=`echo $0 | /bin/sed -e 's,[\\/][^\\/][^\\/]*$,,'`
+
+STATE_OK=0
+STATE_WARNING=1
+STATE_CRITICAL=2
+STATE_UNKNOWN=3
+STATE_DEPENDENT=4
+
+#DXCMD="/usr/bin/dxcmd"
+DXCMD="dxcmd"
+
+print_help() {
+    echo "Novell DirXML 1.1 and Identity Manager 2.x/3.x driver state detector plugin for Nagios"
+    echo "Usage: $PROGNAME [-s hostname|ip-address] -u username, -p password -d driver-dn"
+    echo "Usage: $PROGNAME [-h | --help]"
+}
+
+if [ $# -lt 1 ]; then
+    print_help
+    exit $STATE_UNKNOWN
+fi
+
+while test -n "$1"; do
+    case "$1" in
+        --help)
+            print_help
+            exit $STATE_OK
+            ;;
+        -h)
+            print_help
+            exit $STATE_OK
+            ;;
+        -u)
+            username=$2
+	    #echo $username
+            shift
+            ;;
+        -p)
+            password=$2
+	    #echo $password
+            shift
+            ;;
+        -s)
+            server=$2
+	    #echo $server
+            shift
+            ;;
+        -d)
+            driverdn=$2
+	    #echo $driverdn
+            shift
+            ;;
+        *)
+            echo "Unknown argument: $1"
+            print_help
+            exit $STATE_UNKNOWN
+            ;;
+    esac
+    shift
+done
+
+if [ "$server" == "" ]; then
+   dxcmd_output=`$DXCMD -user $username -password $password -getstate $driverdn 2>&1`
+else
+   dxcmd_output=`$DXCMD -host $server -user $username -password $password -getstate $driverdn 2>&1`
+fi
+
+dxml_drvstate=$?
+#echo "$dxcmd_output"
+#echo "Driver State: $dxml_drvstate"
+
+case $dxml_drvstate in
+    0)	#stopped
+	echo "Driver $driverdn is STOPPED (or does not exist)."
+        exit $STATE_CRITICAL
+        ;;
+    1) 	#starting
+	echo "Driver $driverdn is STARTING..."
+        exit $STATE_OK
+        ;;
+    2)	#running
+	echo "Driver $driverdn is RUNNING."
+        exit $STATE_OK
+        ;;
+    3)	#stopping
+	echo "Driver $driverdn is STOPPING..."
+        exit $STATE_WARNING
+        ;;
+    *)	#error
+	echo "An ERROR occured trying to determine the state of driver $driverdn."
+	echo "$dxcmd_output"
+	echo "Driver State: $dxml_drvstate"
+        exit $STATE_CRITICAL
+        ;;
+esac
+
+exit $STATE_CRITICAL
