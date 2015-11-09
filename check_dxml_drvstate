@@ -20,8 +20,10 @@
 #		    new command line option --br to add html line breaks to text output 
 #		    text output now shows warning/critical values for TAO file size and 
 #		    heartbeat monitoring
+# v1.5, 2008-08-26, added -Z parameter to ldapsearchs
+#                   improved TAO filesize determination for various "ls -l" output styles 
 
-VERSION="1.4, 2008-01-22"
+VERSION="1.5, 2008-08-26"
 
 PROGNAME=`/bin/basename $0`
 PROGPATH=`echo $0 | /bin/sed -e 's,[\\/][^\\/][^\\/]*$,,'`
@@ -276,8 +278,8 @@ if [ "$username" != "$usernameldap" ] && [ "$driverdn" != "$driverdnldap" ]; the
     if [ "$TAOWARNING" != "" ] || [ "$TAOCRITICAL" != "" ]; then
 
         #drivercn=`echo $driverdn | cut -d "." -f 1`
-        ENTRYID=`ldapsearch -x -D "$usernameldap" -w "$password" -b "$driverdnldap" -s base localentryid | grep localEntryID: | cut -d " " -f 2`
-	TAOSIZE=`ls -l "$TAODIR/$ENTRYID.TAO" | cut -d " " -f 6`
+        ENTRYID=`ldapsearch -x -Z -D "$usernameldap" -w "$password" -b "$driverdnldap" -s base localentryid | grep localEntryID: | cut -d " " -f 2`
+	TAOSIZE=`ls -l "$TAODIR/$ENTRYID.TAO" | sed -r "s/ +/ /g" | cut -d " " -f 5`
 	echo -n "$BR Cache file $TAODIR/$ENTRYID.TAO is $TAOSIZE bytes ($TAOWARNING/$TAOCRITICAL)."
 
         dxml_taostate=$STATE_OK
@@ -296,7 +298,7 @@ if [ "$username" != "$usernameldap" ] && [ "$driverdn" != "$driverdnldap" ]; the
 
     if [ "$HBWARNING" != "" ] || [ "$HBCRITICAL" != "" ]; then
 
-	LHB=`ldapsearch -x -D "$usernameldap" -w "$password" -b "$driverdnldap" -s base $HBATTR_LDAPNAME | grep $HBATTR_LDAPNAME: | cut -d " " -f 2`
+	LHB=`ldapsearch -x -Z -D "$usernameldap" -w "$password" -b "$driverdnldap" -s base $HBATTR_LDAPNAME | grep $HBATTR_LDAPNAME: | cut -d " " -f 2`
 	LHB="${LHB:0:4}-${LHB:4:2}-${LHB:6:2} ${LHB:8:2}:${LHB:10:2}:${LHB:12:2} UTC"
 	#echo
 	#echo "Last Heartbeat: `date +"%Y-%m-%d %X %Z" -d "$LHB"`"
