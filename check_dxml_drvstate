@@ -1,11 +1,19 @@
 #! /bin/sh
-
 # nagios script to determine the state of a dirxml driver
-# copyright (c) Lothar Haeger (lothar.haeger@steria-mummert.de)
-# v1.1, 2007-05-21
+# copyright (c) Lothar Haeger (lothar.haeger@brummelhook.com)
+# v1.0, 2006-04-10, initial release
+# v1.1, 2007-05-21, added support for IDM 3.5 and more detailed return messages
+# v1.2, 2007-07-31, added support for edir 8.8
+#                   new command line option "-i" to invert return codes of running and
+#                   stopped drivers. This is meant to help monitoring usually inactive
+#                   backup servers associated to a driver set.
+#                   all changes in v1.2 based on enhancements by Rainer Brunold, many thanks!
+
 
 PROGNAME=`/bin/basename $0`
 PROGPATH=`echo $0 | /bin/sed -e 's,[\\/][^\\/][^\\/]*$,,'`
+INVERT=false
+INVERTMSG=''
 
 STATE_OK=0
 STATE_WARNING=1
@@ -13,14 +21,34 @@ STATE_CRITICAL=2
 STATE_UNKNOWN=3
 STATE_DEPENDENT=4
 
-#DXCMD="/usr/bin/dxcmd"
-DXCMD="dxcmd"
-DXERR="/tmp/dxcmd_error"
+# location of dxcmd varies by edir version:
+# edir 8.7.3.x has dxcmd located in /usr/bin/dxcmd,
+# with edir 8.8.x it's in /opt/novell/eDirectory/bin/dxcmd
+if [ -x "/usr/bin/dxcmd" ]; then
+  DXCMD="/usr/bin/dxcmd"
+elif [ -x "/opt/novell/eDirectory/bin/dxcmd" ]; then
+  DXCMD="/opt/novell/eDirectory/bin/dxcmd"
+else
+  DXCMD="dxcmd"
+fi
+DXERR="/tmp/$PROGNAME.err"
 
 print_help() {
-    echo "Novell DirXML 1.1 and Identity Manager 2.x/3.x driver state detector plugin for Nagios"
-    echo "Usage: $PROGNAME [-s hostname|ip-address] -u username, -p password -d driver-dn"
-    echo "Usage: $PROGNAME [-h | --help]"
+    echo """\
+Usage: $PROGNAME [-s hostname|ip-address] -u username, -p password -d driver-dn [-i]
+Usage: $PROGNAME [-h | --help]
+Novell DirXML 1.1 and Identity Manager 2.x/3.x driver state detector plugin for Nagios
+
+  -s  dirxml/idm server ip or hostname, e.g. 127.0.0.1 or myserver.mydomain.org. 
+      Leave out this option to check drivers running on the same machine as nrpe
+  -u  account dn used to check driver state, nds dotted syntax, e.g. admin.novell
+  -p  passwort in cleartext (good reason to use a restriced account :-)
+  -d  dn of the driver to check, nds dotted syntax, drv_test.my_driverset.system
+  -i  invert return codes to monitor inactive backup servers in a driverset. 
+      A running driver will return STATE_CRITICAL (2), a stopped one STATE_OK (0)
+  -h  this help screen
+  
+Please report bugs to <lothar.haeger@brummelhook.com>."""
 }
 
 if [ $# -lt 1 ]; then
@@ -58,6 +86,10 @@ while test -n "$1"; do
 	    #echo $driverdn
             shift
             ;;
+        -i)
+            INVERT=true
+            INVERTMSG='(on backup server)'
+            ;;
         *)
             echo "Unknown argument: $1"
             print_help
@@ -68,10 +100,8 @@ while test -n "$1"; do
 done
 
 if [ "$server" == "" ]; then
-#   dxcmd_output=`$DXCMD -user $username -password $password -getstate $driverdn 2>&1`
    dxcmd_output=`$DXCMD -user $username -password $password -getstate $driverdn 2>$DXERR`
 else
-#   dxcmd_output=`$DXCMD -host $server -user $username -password $password -getstate $driverdn 2>&1`
    dxcmd_output=`$DXCMD -host $server -user $username -password $password -getstate $driverdn 2>$DXERR`
 fi
 
@@ -81,23 +111,31 @@ dxml_drvstate=$?
 
 case $dxml_drvstate in
     0)	#stopped
-	echo "Driver $driverdn is STOPPED."
-        exit $STATE_CRITICAL
+	echo "Driver $driverdn is STOPPED. ${INVERTMSG}"
+        if [ "${INVERT}" = "true" ]; then
+           exit $STATE_OK
+        else
+           exit $STATE_CRITICAL
+        fi
         ;;
     1) 	#starting
-	echo "Driver $driverdn is STARTING..."
+	echo "Driver $driverdn is STARTING...  ${INVERTMSG}"
         exit $STATE_OK
         ;;
     2)	#running
-	echo "Driver $driverdn is RUNNING."
-        exit $STATE_OK
+	echo "Driver $driverdn is RUNNING. ${INVERTMSG}"
+        if [ "${INVERT}" = "true" ]; then
+           exit $STATE_CRITICAL
+        else
+           exit $STATE_OK
+        fi
         ;;
     3)	#stopping
-	echo "Driver $driverdn is STOPPING..."
+	echo "Driver $driverdn is STOPPING...  ${INVERTMSG}"
         exit $STATE_WARNING
         ;;
    11)	#getting schema
-	echo "Driver $driverdn is GETTING the application SCHEMA..."
+	echo "Driver $driverdn is GETTING the application SCHEMA...  ${INVERTMSG}"
         exit $STATE_OK
         ;;
    96)	#access forbidden
@@ -109,13 +147,14 @@ case $dxml_drvstate in
         exit $STATE_CRITICAL
         ;;
   255)	#generic error
-	echo "Driver $driverdn could not be ckecked due to an UNKNOWN ERROR (`egrep 'xception' $DXERR`)."
+	echo "Driver $driverdn could not be checked due to an UNKNOWN ERROR (`egrep 'xception' $DXERR`)."
         exit $STATE_CRITICAL
         ;;
     *)	#other dxcmd error
-	echo "Driver $driverdn could not be ckecked due to an UNKNOWN ERROR (Error code $dxml_drvstate)"
+	echo "Driver $driverdn could not be checked due to an UNKNOWN ERROR (Error code $dxml_drvstate)"
         exit $STATE_CRITICAL
         ;;
 esac
 
 exit $STATE_CRITICAL
+
