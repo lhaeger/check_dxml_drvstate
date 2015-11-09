@@ -9,15 +9,19 @@
 #                   backup servers associated to a driver set.
 #                   all changes in v1.2 based on enhancements by Rainer Brunold, many thanks!
 # v1.3, 2007-12-05, added TAO file size monitoring
-#		    username must now be ldap typed (for TAO file size monitoring),
-#                   still works with nds dotted username/driverdn, but only without TAO size checks
+#		    username must now be ldap typed (for TAO file size monitoring)
 #		    take driver startup mode into consideration when driver not running:
 #			disabled -> STATE_OK, 
 #		    	manual   -> STATE_WARNING
 #		    	auto     -> STATE_CRITICAL
 #	    	    added long command line options
+# v1.4, 2008-01-22, added heartbeat monitoring, requires a schema extension (aux class), driver 
+#		    heartbeat and a special policy on the driver
+#		    new command line option --br to add html line breaks to text output 
+#		    text output now shows warning/critical values for TAO file size and 
+#		    heartbeat monitoring
 
-VERSION="1.3, 2007-12-05"
+VERSION="1.4, 2008-01-22"
 
 PROGNAME=`/bin/basename $0`
 PROGPATH=`echo $0 | /bin/sed -e 's,[\\/][^\\/][^\\/]*$,,'`
@@ -30,9 +34,13 @@ STATE_CRITICAL=2
 STATE_UNKNOWN=3
 STATE_DEPENDENT=4
 
+BR=
+TREE="data"
+HBATTR_LDAPNAME="nagiosLastHeartBeat"
+
 print_help() {
     echo """\
-Usage: $PROGNAME [-s hostname|ip-address] -u username, -p password -d driver-dn [-i] [-tw warnsize] [-tc criticalsize] [-tree treename]
+Usage: $PROGNAME [-s hostname|ip-address] -u username, -p password -d driver-dn [-i] [-tw warnsize -tc criticalsize [-tree treename]] 
 Usage: $PROGNAME [-h | --help]
 Novell DirXML 1.1 and Identity Manager 2.x/3.x driver state detector plugin for Nagios
 Version $VERSION
@@ -47,8 +55,16 @@ Version $VERSION
       --tw         max TAO file size before STATE_WARNING (1) will be reported
       --tc         max TAO file size before STATE_CRITICAL (2) will be reported. 
   	           If neither --tw and --tc are set, TAO file size checking will be disabled
-      --tree       treename of the driver to be checked. only needed with --tw and --tc on 
- 	           edir 8.8 and above  
+      --hbw        max time in seconds since last heartbeat before STATE_WARNING (1) will be reported
+      --hbc        max time in seconds since last heartbeat before STATE_CRITICAL (2) will be reported. 
+  	           If neither --hbw and --hbc are set, heartbeat checking will be disabled
+		   Please note that a schema extension and a special event transform policy on the 
+		   driver are necessary to support heartbeat checking
+      --hbattr     ldap name of the attr that stores the last heartbeat timestamp if a non-default
+                   schema extension is used
+      --tree       treename of the driver to be checked. only needed with TAO file size monitoring
+                   on edir 8.8 running multiple instances (developement feature - not tested!)
+      --br         add <br> tags to output for better readability in HTML display
   -h, --help       this help screen
   
 Please report bugs to <lothar.haeger@brummelhook.com>."""
@@ -109,12 +125,27 @@ while test -n "$1"; do
             INVERT=true
             INVERTMSG='(on backup server)'
             ;;
+        --br)
+	    BR="<br>"
+	    ;;
         --tw)
 	    TAOWARNING=$2
 	    shift
 	    ;;
         --tc)
 	    TAOCRITICAL=$2
+	    shift
+	    ;;
+        --hbw)
+	    HBWARNING=$2
+	    shift
+	    ;;
+        --hbc)
+	    HBCRITICAL=$2
+	    shift
+	    ;;
+        --hbattr)
+	    HBATTR_LDAPNAME=$2
 	    shift
 	    ;;
         --tree)
@@ -124,7 +155,7 @@ while test -n "$1"; do
         *)
             echo "Unknown argument: $1"
             print_help
-            exit $STATE_WARNING
+            exit $STATE_UNKNOWN
             ;;
     esac
     shift
@@ -240,18 +271,15 @@ case $dxml_drvstate in
         ;;
 esac
 
-
-
 if [ "$username" != "$usernameldap" ] && [ "$driverdn" != "$driverdnldap" ]; then
  
-    #drivercn=`echo $driverdn | cut -d "." -f 1`
-    ENTRYID=`ldapsearch -x -D "$usernameldap" -w "$password" -b "$driverdnldap" -s base localentryid | grep localEntryID: | cut -d " " -f 2`
-    TAOSIZE=`ls -l "$TAODIR/$ENTRYID.TAO" | cut -d " " -f 6`
-    echo " Cache file $TAODIR/$ENTRYID.TAO is $TAOSIZE bytes."
+    if [ "$TAOWARNING" != "" ] || [ "$TAOCRITICAL" != "" ]; then
 
-    if [ "$TAOWARNING" == "" ] && [ "$TAOCRITICAL" == "" ]; then
-        exit $dxml_drvstate
-    else
+        #drivercn=`echo $driverdn | cut -d "." -f 1`
+        ENTRYID=`ldapsearch -x -D "$usernameldap" -w "$password" -b "$driverdnldap" -s base localentryid | grep localEntryID: | cut -d " " -f 2`
+	TAOSIZE=`ls -l "$TAODIR/$ENTRYID.TAO" | cut -d " " -f 6`
+	echo -n "$BR Cache file $TAODIR/$ENTRYID.TAO is $TAOSIZE bytes ($TAOWARNING/$TAOCRITICAL)."
+
         dxml_taostate=$STATE_OK
 
         if [ "$TAOWARNING" != "" ] && [ $TAOSIZE -gt $TAOWARNING ]; then
@@ -260,15 +288,39 @@ if [ "$username" != "$usernameldap" ] && [ "$driverdn" != "$driverdnldap" ]; the
         if [ "$TAOCRITICAL" != "" ] && [ $TAOSIZE -gt $TAOCRITICAL ]; then
     	    dxml_taostate=$STATE_CRITICAL
         fi
-            if [ $dxml_taostate -gt $dxml_drvstate ]; then
-    	    exit $dxml_taostate
-        else
-    	    exit $dxml_drvstate
+
+        if [ $dxml_taostate -gt $dxml_drvstate ]; then
+    	    dxml_drvstate=$dxml_taostate
         fi
     fi
-else
-    echo
-    exit $dxml_drvstate
+
+    if [ "$HBWARNING" != "" ] || [ "$HBCRITICAL" != "" ]; then
+
+	LHB=`ldapsearch -x -D "$usernameldap" -w "$password" -b "$driverdnldap" -s base $HBATTR_LDAPNAME | grep $HBATTR_LDAPNAME: | cut -d " " -f 2`
+	LHB="${LHB:0:4}-${LHB:4:2}-${LHB:6:2} ${LHB:8:2}:${LHB:10:2}:${LHB:12:2} UTC"
+	#echo
+	#echo "Last Heartbeat: `date +"%Y-%m-%d %X %Z" -d "$LHB"`"
+        #echo "Now:            `date +"%Y-%m-%d %X %Z"`"
+        #echo "Last Heartbeat: `date +%s -d "$LHB"`"
+	#echo "Now:            `date +%s`"
+
+	let DIFF=`date +%s`-`date +%s -d "$LHB"`
+	echo -n "$BR Last Heartbeat occured $DIFF seconds ago at `date +"%Y-%m-%d %X %Z" -d "$LHB"` ($HBWARNING/$HBCRITICAL)."
+
+        dxml_hbstate=$STATE_OK
+
+        if [ "$HBWARNING" != "" ] && [ $DIFF -gt $HBWARNING ]; then
+	    dxml_hbstate=$STATE_WARNING
+        fi
+        if [ "$HBCRITICAL" != "" ] && [ $DIFF -gt $HBCRITICAL ]; then
+    	    dxml_hbstate=$STATE_CRITICAL
+        fi
+
+        if [ $dxml_hbstate -gt $dxml_drvstate ]; then
+    	    dxml_drvstate=$dxml_hbstate
+        fi
+    fi
 fi
 
-exit $STATE_CRITICAL
+echo
+exit $dxml_drvstate

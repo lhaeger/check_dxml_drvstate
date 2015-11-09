@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?><driver-config>
+	<driver-options/>
+	<subscriber-options/>
+	<publisher-options>
+		<pub-heartbeat-interval display-name="Publisher Heartbeat (minutes)">5</pub-heartbeat-interval>
+	</publisher-options>
+</driver-config>

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?><policy xmlns:jdate="http://www.novell.com/nxsl/java/java.util.Date">
+	<rule>
+		<description>Write heartbeat timestamp to nagiosLastHeartbeat</description>
+		<comment xml:space="preserve">IDM nagios plugin will read this attribute to check if driver is still alive. Heartbeat must be enabled on the driver, see http://www.novell.com/coolsolutions/tools/17255.html for details.</comment>
+		<comment name="author" xml:space="preserve">Lothar Haeger</comment>
+		<comment name="version" xml:space="preserve">1.4</comment>
+		<comment name="lastchanged" xml:space="preserve">2008-01-22</comment>
+		<conditions>
+			<and>
+				<if-xpath op="true">self::status[@type="heartbeat"]</if-xpath>
+			</and>
+		</conditions>
+		<actions>
+			<do-add-dest-attr-value direct="true" name="Object Class">
+				<arg-dn>
+					<token-global-variable name="dirxml.auto.driverdn"/>
+				</arg-dn>
+				<arg-value type="string">
+					<token-text xml:space="preserve">nagiosHelper</token-text>
+				</arg-value>
+			</do-add-dest-attr-value>
+			<do-set-dest-attr-value direct="true" name="nagiosLastHeartbeat">
+				<arg-dn>
+					<token-global-variable name="dirxml.auto.driverdn"/>
+				</arg-dn>
+				<arg-value type="time">
+					<token-xpath expression="round(jdate:getTime(jdate:new()) div 1000)"/>
+				</arg-value>
+			</do-set-dest-attr-value>
+		</actions>
+	</rule>
+</policy>

@@ -1,0 +1,22 @@
+1. extend the tree schema from nagiosHelper.ldif
+2. add an event transform policy to monitored driver from Heartbeat4Nagios.xml
+3. enable publisher heartbeat as shown in publisher-heartbeat.xml
+4. restart driver
+5. add --hbc and/or --hbw parameters for the driver to nrpe.cfg
+6. (optional) add the --br option for better readability in HTML display
+7. wait for or reschedule next service check for the driver
+
+Schema extension example:
+   ice -lice.log -SLDIF -fP:\ath\to\nagiosHelper.ldif -v -DLDAP -s10.0.0.111 -p389 -dcn=admin,o=novell -w********* -B
+
+nrpe.cfg config example:
+   command[dxml_srv_pwnotify]=/path/to/check_dxml_drvstate -u cn=dxcmd,o=novell -p ***** --tw 500000 --tc 1000000 --hbw 360 --hbc 900 --br -d cn=srv_pwnotify,cn=dirxml_drvset,o=novell
+
+If you want to use a different attribute to store the heartbeat timestamp:
+
+1. edit the Heartbeat4Nagios policy to
+    a) reflect the new attribute name
+    b) make sure the timestamp is UTC and
+    c) has LDAP format (e.g. 20080122123345Z = 2008-01-22 12:33:45 UTC)
+2. edit the line starting with "HBATTR_LDAPNAME=" in check_dxml_drvstate to match the new attribute name
+3. test extensively ;-)

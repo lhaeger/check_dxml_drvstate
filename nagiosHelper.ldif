@@ -1,0 +1,26 @@
+# Record 1
+# Syntax TIME
+# generated ASN2
+dn: cn=schema
+changetype: modify
+add: attributetypes
+attributetypes: (
+ nagioslastheartbeat-oid
+  NAME 'nagiosLastHeartbeat' 
+  SYNTAX '1.3.6.1.4.1.1466.115.121.1.24' 
+  SINGLE-VALUE
+  X-NDS_NEVER_SYNC '1'
+  X-NDS_NOT_SCHED_SYNC_IMMEDIATE '1'
+  )
+
+# Record 2
+dn: cn=schema
+changetype: modify
+add: objectClasses
+objectClasses: (
+  nagioshelper-oid
+  NAME 'nagiosHelper'
+  AUXILIARY
+  MAY ( 'nagiosLastHeartbeat' )
+  X-NDS_NOT_CONTAINER '1'
+  )
