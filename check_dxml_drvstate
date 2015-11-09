@@ -1,35 +1,71 @@
 #! /bin/sh
-# nagios script to determine the state of a dirxml driver
-# copyright (c) Lothar Haeger (lothar.haeger@brummelhook.com)
-# v1.0, 2006-04-10, initial release
-# v1.1, 2007-05-21, added support for IDM 3.5 and more detailed return messages
-# v1.2, 2007-07-31, added support for edir 8.8
-#                   new command line option "-i" to invert return codes of running and
-#                   stopped drivers. This is meant to help monitoring usually inactive
-#                   backup servers associated to a driver set.
-#                   all changes in v1.2 based on enhancements by Rainer Brunold, many thanks!
-# v1.3, 2007-12-05, added TAO file size monitoring
-#		    username must now be ldap typed (for TAO file size monitoring)
-#		    take driver startup mode into consideration when driver not running:
-#			disabled -> STATE_OK, 
-#		    	manual   -> STATE_WARNING
-#		    	auto     -> STATE_CRITICAL
-#	    	    added long command line options
-# v1.4, 2008-01-22, added heartbeat monitoring, requires a schema extension (aux class), driver 
-#		    heartbeat and a special policy on the driver
-#		    new command line option --br to add html line breaks to text output 
-#		    text output now shows warning/critical values for TAO file size and 
-#		    heartbeat monitoring
-# v1.5, 2008-08-26, added -Z parameter to ldapsearchs
-#                   improved TAO filesize determination for various "ls -l" output styles 
-# v1.6, 2008-09-01, fixed wrong $TAODIR for Edir 8.8x
+# nagios/icinga script to determine the state of a dirxml driver
+# copyright (c) Lothar Haeger (lothar.haeger@is4it.de)
+#
+# v1.0,  2006-04-10, initial release
+# v1.1,  2007-05-21, added support for IDM 3.5 and more detailed return messages
+# v1.2,  2007-07-31, added support for edir 8.8
+#                    new command line option "-i" to invert return codes of running and
+#                    stopped drivers. This is meant to help monitoring usually inactive
+#                    backup servers associated to a driver set.
+#                    all changes in v1.2 based on enhancements by Rainer Brunold, many thanks!
+# v1.3,  2007-12-05, added TAO file size monitoring
+#                    username must now be ldap typed (for TAO file size monitoring)
+#                    take driver startup mode into consideration when driver not running:
+#                    disabled -> STATE_OK,
+#                    manual   -> STATE_WARNING
+#                    auto     -> STATE_CRITICAL
+#                    added long command line options
+# v1.4,  2008-01-22, added heartbeat monitoring, requires a schema extension (aux class), driver
+#                    heartbeat and a special policy on the driver
+#                    new command line option --br to add html line breaks to text output
+#                    text output now shows warning/critical values for TAO file size and
+#                    heartbeat monitoring
+# v1.5,  2008-08-26, added -Z parameter to ldapsearchs
+#                    improved TAO filesize determination for various "ls -l" output styles
+# v1.6,  2008-09-01, fixed wrong $TAODIR for Edir 8.8x
+# v1.7,  2009-03-12, added --nl parameter
+#                    minor bug fixes and cosmetics
+# v1.6d, 2010-10-25, fixed TAO file finding logic for multi-instance eDirectory 8.8
+#                    changed ldapsearch calls from "-Z" to "-H ldaps://"
+#                    (David's branch)
+# v1.7d, 2010-10-28, added optional port specifiers for eDirectory (524), LDAP (389), and
+#                    LDAPS (636) to allow non-default configurations to be monitored.
+#                    (David's branch)
+# v1.8,  2010-11-10, merged David's and my branch
+#                    added --ldapmode, --ldapport and --edirport parameters based on David's
+#                    idea and original code
+#                    added -v, -vv and --verbose parameters, output is logged to /var/log/<scriptname>.log
+#                    added --short option
+#                    try to force use of openldap's ldapsearch to help avoid a bug in
+#                    Novell's ldapsearch implementation when using the -Z switch
+#                    minor bug fixes, code streamlining and trace cosmetics
+# v1.9,  2010-11-21, rewrote the code to find edir tools and dib folder
+#                    added --bindir, --logfile, -l parameters
+# v1.6j, 2012-04-26  Event Time checking added by <jplahl@novell.com>
+#                    (Joachim's branch)
+# v2.0,  2012-07-29  merged Joachim's and my branch
+#                    added -o parameter to overwrite log file on each run
+#                    added --csw/--csc/--caw/--cac parameters
+# v2.1,  2014-03-18  added --tjw/--tjc/--tjattr parameters
+#                    changed default heartbeat attr
+#                    added --ldaponly parameter (not yet implemented) 
 
-VERSION="1.6, 2008-09-01"
 
-PROGNAME=`/bin/basename $0`
-PROGPATH=`echo $0 | /bin/sed -e 's,[\\/][^\\/][^\\/]*$,,'`
+VERSION="2.1, 2014-03-18"
+
+PROGNAME=`basename $0`
+CMDLINE="$0 $*"
+
+DXCMD=`which dxcmd`
+NDSCONFIG=`which ndsconfig`
+STATFILE="/tmp/$PROGNAME.tmp"
+
 INVERT=false
-INVERTMSG=''
+INVERTMSG='.'
+OUTPUT=LONG
+BR=" "
+NL=
 
 STATE_OK=0
 STATE_WARNING=1
@@ -37,40 +73,96 @@ STATE_CRITICAL=2
 STATE_UNKNOWN=3
 STATE_DEPENDENT=4
 
-BR=
-TREE="data"
-HBATTR_LDAPNAME="nagiosLastHeartBeat"
+TREE=
+TAODIR=
+HBATTR_LDAPNAME="aieLastHeartbeat"
+TJATTR_LDAPNAME="aieLastTrigger"
+# uncomment the following line when using the schema extension from versions 1.x
+#HBATTR_LDAPNAME="nagiosLastHeartBeat"
+
+
+SERVER=127.0.0.1
+EDIR_PORT=524
+LDAP_MODE=TLS
+LDAP_PORT=
+LDAP_ONLY=false
+
+LOGFILE="/var/log/$PROGNAME.log"
+OVERWRITE=false
+TRACE_LEVEL=0
+
+trace() {
+    if [ $TRACE_LEVEL -ge $1 ]; then
+        echo -e "#$$: $2" >> $LOGFILE
+    fi
+}
 
 print_help() {
-    echo """\
-Usage: $PROGNAME [-s hostname|ip-address] -u username, -p password -d driver-dn [-i] [-tw warnsize -tc criticalsize [-tree treename]] 
-Usage: $PROGNAME [-h | --help]
-Novell DirXML 1.1 and Identity Manager 2.x/3.x driver state detector plugin for Nagios
-Version $VERSION
+    echo """
+          Usage: $PROGNAME [-s <server>] -u <username>, -p <password> -d <driver-dn> [-i] [--tw <warnsize> --tc <criticalsize> [--tree <treename>]]
+          Usage: $PROGNAME [-h | --help | -?]
+          Novell DirXML and Novell/NetIQ Identity Manager driver state detector plugin for Nagios/Icinga
+          Version $VERSION
 
-  -s, --server     dirxml/idm server ip or hostname, e.g. 127.0.0.1 or myserver.mydomain.org. 
-            	   Leave out this option to check drivers running on the same machine as nrpe
-  -u, --username   account used to check driver state, ldap typed syntax, e.g. cn=admin,o=novell
-  -p, --password   passwort in cleartext (good reason to use a restriced account :-)
-  -d, --driver     driver to check, ldap typed syntax, cn=drv_test,cn=my_driverset,o=system
-  -i, --invert     invert return codes to monitor inactive backup servers in a driverset. 
-            	   A running driver will return STATE_CRITICAL (2), a stopped one STATE_OK (0)
-      --tw         max TAO file size before STATE_WARNING (1) will be reported
-      --tc         max TAO file size before STATE_CRITICAL (2) will be reported. 
-  	           If neither --tw and --tc are set, TAO file size checking will be disabled
-      --hbw        max time in seconds since last heartbeat before STATE_WARNING (1) will be reported
-      --hbc        max time in seconds since last heartbeat before STATE_CRITICAL (2) will be reported. 
-  	           If neither --hbw and --hbc are set, heartbeat checking will be disabled
-		   Please note that a schema extension and a special event transform policy on the 
-		   driver are necessary to support heartbeat checking
-      --hbattr     ldap name of the attr that stores the last heartbeat timestamp if a non-default
-                   schema extension is used
-      --tree       treename of the driver to be checked. only needed with TAO file size monitoring
-                   on edir 8.8 running multiple instances (developement feature - not tested!)
-      --br         add <br> tags to output for better readability in HTML display
-  -h, --help       this help screen
-  
-Please report bugs to <lothar.haeger@brummelhook.com>."""
+            -s, --server     DirXML/IDM server IP or hostname, e.g. 127.0.0.1 or myserver.mydomain.org.
+                             Leave out this option to check drivers running on the same machine as nrpe.
+                --edirport   eDirectory (NCP) port. Defaults to 524 if not specified.
+                --ldapmode   TLS, SSL or CLEAR. Defaults to TLS if not specified
+                --ldapport   LDAP port. Defaults to 636 if not specified and LDAP mode is SSL.
+                             Defaults to 389 if not specified and LDAP mode is TLS or CLEAR.
+                --ldaponly   Use dxcmd in LDAP mode (default: NDAP), requires IDM 4.x or higher
+            -u, --username   Account used to check driver state, ldap typed syntax, e.g. cn=admin,o=novell
+            -p, --password   Password in cleartext (good reason to use a restriced account :-)
+            -d, --driver     Driver to check, ldap typed syntax, cn=drv_test,cn=my_driverset,o=system
+            -i, --invert     Invert return codes to monitor inactive backup servers in a driverset.
+                             A running driver will return STATE_CRITICAL (2), a stopped one STATE_OK (0)
+                --tw         Max TAO file size before STATE_WARNING (1) will be reported
+                --tc         Max TAO file size before STATE_CRITICAL (2) will be reported
+                             If neither --tw and --tc are set, TAO file size checking will be disabled
+                             (--tw/--tc parameters are deprecated: use --csw/--csc instead)
+                --csw        Max cache size before STATE_WARNING (1) will be reported
+                --csc        Max cache size before STATE_CRITICAL (2) will be reported
+                             If neither --csw and --csc are set, cache size checking will be disabled
+                             (--csw/--csc parameters replace --tw/--tc; cache size is TAO file size minus 72 bytes)
+                --caw        Max cache age (in seconds) before STATE_WARNING (1) will be reported
+                --cac        Max cache age (in seconds) before STATE_CRITICAL (2) will be reported
+                             If neither --caw and --cac are set, cache size checking will be disabled
+                --ew         max time difference between oldest and newest cached event before STATE_WARNING (1) will be reported
+                --ec         max time difference between oldest and newest cached event before STATE_CRITICAL (2) will be reported
+                --hbw        Max time in seconds since last publisher heartbeat before STATE_WARNING (1) will be reported
+                --hbc        Max time in seconds since last publisher heartbeat before STATE_CRITICAL (2) will be reported
+                             If neither --hbw and --hbc are set, publisher heartbeat checking will be disabled
+                             Please note that a schema extension and a special publisher event transform policy on the
+                             driver are necessary to support heartbeat checking
+                --hbattr     LDAP name of the attr that stores the last publisher heartbeat timestamp if a non-default
+                             schema extension is used
+                --tjw        Max time in seconds since last trigger job before STATE_WARNING (1) will be reported
+                --tjc        Max time in seconds since last trigger job before STATE_CRITICAL (2) will be reported
+                             If neither --tjw and --tjc are set, trigger job checking will be disabled
+                             Please note that a schema extension and a special subscriber event transform policy on the
+                             driver are necessary to support trigger job checking
+                --tjattr     LDAP name of the attr that stores the last trigger job timestamp if a non-default
+                             schema extension is used
+                --tree       Treename of the driver to be checked. Only needed with TAO file size monitoring
+                             on edir 8.8 running multiple instances. If not set, the first instance reported
+                             by "ndsconfig get" will be used
+                --short      print short output, omit driver and file names
+                --br         Add <br> tags to output for better readability in HTML display
+                --nl         Add line breaks to output for better readability in console/file output
+                --bindir     Directory where dxcmd and ndsconfig binaries are located
+            -v, --verbose    Verbose output, -vv writes extra debug messages to $LOGFILE
+            -l, --logfile    Logfile to write debug messages to instead of default
+            -o, --overwrite  Overwrite log file on each run
+            -h, -?, --help   This help screen
+
+          Many thanks to David Gersic for adding multi-instance edir support, basic HA cluster
+          support, custom LDAP/NDAP port parameters and more.
+
+          And to Joachim Plahl <jplahl@novell.com> for the original event time checking code and pointing my nose
+          on using dxcmd stats to finally support remote cache age and size checks.
+
+          Please report bugs to <lothar.haeger@is4it.de>.
+          """ | sed "s|          ||" | grep -vE "\-\-(ldaponly|ew|ec)"
 }
 
 if [ $# -lt 1 ]; then
@@ -80,81 +172,137 @@ fi
 
 while test -n "$1"; do
     case "$1" in
-        --help)
+        --help|-h|-\?)
             print_help
             exit $STATE_OK
             ;;
-        -h)
-            print_help
-            exit $STATE_OK
-            ;;
-        -u)
-            usernameldap=$2    
+        --username|-u)
+            USERLDAP=$2
             shift
             ;;
-        --username)
-            usernameldap=$2    
+        --password|-p)
+            PASSWD=$2
             shift
             ;;
-        -p)
-            password=$2
+        --server|-s)
+            SERVER=$2
             shift
             ;;
-        --password)
-            password=$2
+        --driver|-d)
+            DRV_LDAP=$2
             shift
             ;;
-        -s)
-            server=$2
-            shift
-            ;;
-        --server)
-            server=$2
-            shift
-            ;;
-        -d)
-            driverdnldap=$2
-            shift
-            ;;
-        --driver)
-            driverdnldap=$2
-            shift
-            ;;
-        -i)
+        --invert|-i)
             INVERT=true
-            INVERTMSG='(on backup server)'
-            ;;
-        --invert)
-            INVERT=true
-            INVERTMSG='(on backup server)'
+            INVERTMSG=" (on backup server)."
             ;;
         --br)
-	    BR="<br>"
-	    ;;
+            BR=" <br> "
+            ;;
+        --short)
+            OUTPUT=SHORT
+            ;;
+        --nl)
+            NL="\n"
+            ;;
         --tw)
-	    TAOWARNING=$2
-	    shift
-	    ;;
+            TAOWARNING=$2
+            shift
+            ;;
         --tc)
-	    TAOCRITICAL=$2
-	    shift
-	    ;;
+            TAOCRITICAL=$2
+            shift
+            ;;
+        --csw)
+            SIZEWARNING=$2
+            shift
+            ;;
+        --csc)
+            SIZECRITICAL=$2
+            shift
+            ;;
+        --caw)
+            AGEWARNING=$2
+            shift
+            ;;
+        --cac)
+            AGECRITICAL=$2
+            shift
+            ;;
+        --ew)
+            EVENTWARNING=$2
+            shift
+            ;;
+        --ec)
+            EVENTCRITICAL=$2
+            shift
+            ;;
         --hbw)
-	    HBWARNING=$2
-	    shift
-	    ;;
+            HBWARNING=$2
+            shift
+            ;;
         --hbc)
-	    HBCRITICAL=$2
-	    shift
-	    ;;
+            HBCRITICAL=$2
+            shift
+            ;;
         --hbattr)
-	    HBATTR_LDAPNAME=$2
-	    shift
-	    ;;
+            HBATTR_LDAPNAME=$2
+            shift
+            ;;
+        --tjw)
+            TJWARNING=$2
+            shift
+            ;;
+        --tjc)
+            TJCRITICAL=$2
+            shift
+            ;;
+        --tjattr)
+            TJATTR_LDAPNAME=$2
+            shift
+            ;;
         --tree)
-	    TREE=$2
-	    shift
-	    ;;
+            TREE=$2
+            shift
+            ;;
+        --edirport|--ep)
+            EDIR_PORT=$2
+            shift
+            ;;
+        --ldapport)
+            LDAP_PORT=$2
+            shift
+            ;;
+        --lsp)
+            LDAP_PORT=$2
+            LDAP_MODE=SSL
+            shift
+            ;;
+        --ldapmode)
+            LDAP_MODE=$2
+            shift
+            ;;
+        --ldaponly)
+            LDAP_ONLY=true
+            ;;
+        --verbose|-v)
+            TRACE_LEVEL=1
+            ;;
+        -vv)
+            TRACE_LEVEL=2
+            ;;
+          --logfile|-l)
+            LOGFILE=$2
+            shift
+            ;;
+        --overwrite|-o)
+            OVERWRITE=true
+            ;;
+      --bindir)
+            DXCMD=$2/dxcmd
+            NDSCONFIG=$2/ndsconfig
+            shift
+            ;;
         *)
             echo "Unknown argument: $1"
             print_help
@@ -164,166 +312,373 @@ while test -n "$1"; do
     shift
 done
 
-username=${usernameldap//,/.}
-username=${username//cn=/}
-username=${username//ou=/}
-username=${username//o=/}
-username=${username//l=/}
-username=${username//s=/}
 
-driverdn=${driverdnldap//,/.}
-driverdn=${driverdn//cn=/}
-driverdn=${driverdn//ou=/}
-driverdn=${driverdn//o=/}
-driverdn=${driverdn//l=/}
-driverdn=${driverdn//s=/}
-
-#echo $usernameldap
-#echo $username
-#echo $paddword
-#echo $driverdnldap
-#echo $driverdn
-#echo $server
-#echo $driverdn
-
-# location of dxcmd varies by edir version:
-# edir 8.7.3.x has dxcmd located in /usr/bin/dxcmd,
-# with edir 8.8.x it's in /opt/novell/eDirectory/bin/dxcmd
-if [ -x "/usr/bin/dxcmd" ]; then
-  DXCMD="/usr/bin/dxcmd"
-  TAODIR="/var/nds/dib"
-elif [ -x "/opt/novell/eDirectory/bin/dxcmd" ]; then
-  DXCMD="/opt/novell/eDirectory/bin/dxcmd"
-  TAODIR="/var/opt/novell/eDirectory/$TREE/dib"
+if [ "$LDAP_PORT" == "" ] && [ "$LDAP_MODE" == "SSL" ]; then
+    LDAP_PORT=636
 else
-  DXCMD="dxcmd"
-  TAOWARNING=
-  TAOCRITICAL=
-fi
-DXERR="/tmp/$PROGNAME.err"
-
-
-if [ "$server" == "" ]; then
-   dxcmd_output=`$DXCMD -user "$username" -password "$password" -getstate "$driverdn" 2>$DXERR`
-else
-   dxcmd_output=`$DXCMD -host "$server" -user "$username" -password "$password" -getstate "$driverdn" 2>$DXERR`
+    LDAP_PORT=389
 fi
 
-dxml_drvstate=$?
-#echo "$dxcmd_output"
-#echo "Driver State: $dxml_drvstate"
+USERNDAP=$(echo $USERLDAP | sed -r "s/(,)?[^,=]+=/\1/g; s/,/./g")
+DRV_NDAP=$(echo $DRV_LDAP | sed -r "s/(,)?[^,=]+=/\1/g; s/,/./g")
 
-case $dxml_drvstate in
-    0)	#stopped
-    	if [ "$server" == "" ]; then
-	   dxcmd_output=`$DXCMD -user "$username" -password "$password" -getstartoption "$driverdn" 2>$DXERR`
-	else
-	   dxcmd_output=`$DXCMD -host "$server" -user "$username" -password "$password" -getstartoption "$driverdn" 2>$DXERR`
-	fi
-	dxml_drvstartoption=$?
-	#echo $dxml_drvstartoption
-    	if [ $dxml_drvstartoption = 0 ]; then
-	    echo "Driver $driverdn is DISABLED. ${INVERTMSG}"
-	    exit $STATE_OK
-	else
-	    echo -n "Driver $driverdn is STOPPED. ${INVERTMSG}"
-    	    if [ "${INVERT}" = "true" ]; then
-        	dxml_drvstate=$STATE_OK
-    	    elif [ $dxml_drvstartoption = 1 ]; then
-    		dxml_drvstate=$STATE_WARNING
-	    else
-        	dxml_drvstate=$STATE_CRITICAL
-	    fi
-	fi
-        ;;
-    1) 	#starting
-	echo -n "Driver $driverdn is STARTING...  ${INVERTMSG}"
-        dxml_drvstate=$STATE_OK
-        ;;
-    2)	#running
-	echo -n "Driver $driverdn is RUNNING. ${INVERTMSG}"
-        if [ "${INVERT}" = "true" ]; then
-           dxml_drvstate=$STATE_CRITICAL
+if [ ! -f $DXCMD ]; then
+    DXCMD=dxcmd
+    NDSCONFIG=ndsconfig
+fi
+
+if [ "$TREE" == "" ]; then
+    TREE=`$NDSCONFIG get | grep tree-name | head -n 1 | cut -d = -f 2`
+fi
+
+# the following assumes that "ndsconfig get" prints "n4u.nds.dibdir" before "n4u.base.tree-name"
+DIBDIR=`$NDSCONFIG get | grep -E 'dibdir|tree-name' | grep -B 1 -E "=${TREE}$" | head -n 1 | cut -d = -f 2`
+if [ -d $DIBDIR ]; then
+    TAODIR=$DIBDIR
+    CLUSTERSTATE="(hosted on this server.)"
+else
+    CLUSTERSTATE="(not hosted on this server.)"
+fi
+
+if [ "${OVERWRITE}" = "true" ]; then
+    echo > $LOGFILE
+fi
+
+trace 1 "--- BEGIN logging at `date +'%F %T'` -------------------------------------------------------------"
+trace 2 "Command line: "
+trace 2 "  $CMDLINE"
+trace 1 "Edirectory"
+trace 1 "  Tree:           $TREE"
+trace 2 "  dxcmd:          $DXCMD"
+trace 2 "  ndsconfig       $NDSCONFIG"
+trace 1 "  DIB folder:     $TAODIR $CLUSTERSTATE"
+trace 1 "Connection parameters"
+trace 1 "  IDM Server:     $SERVER"
+trace 1 "  NCP port:       $EDIR_PORT"
+trace 1 "  LDAP mode:      $LDAP_MODE"
+trace 1 "  LDAP port:      $LDAP_PORT"
+trace 1 "  LDAP Only:      $LDAP_ONLY"
+trace 1 "  LDAP username:  $USERLDAP"
+trace 1 "  NDAP username:  $USERNDAP"
+trace 2 "  User password:  $PASSWD"
+trace 1 "  LDAP driver DN: $DRV_LDAP"
+trace 1 "  NDAP driver DN: $DRV_NDAP"
+
+DXCMD="$DXCMD -host $SERVER -port $EDIR_PORT"
+
+trace 1 "Checking driver state"
+trace 2 "  Running $DXCMD -user $USERNDAP -password $PASSWD -getstate $DRV_NDAP"
+DXCMD_OUTPUT=`$DXCMD -user "$USERNDAP" -password "$PASSWD" -v -getstate "$DRV_NDAP" 2>>$LOGFILE`
+DRV_STATE=$?
+trace 1 "  Driver State: $DRV_STATE"
+trace 2 "  DxCmd Output:"
+trace 2 "$DXCMD_OUTPUT"
+
+if [ "$OUTPUT" == "SHORT" ]; then
+    DRIVERDISPLAY="Driver"
+else
+    DRIVERDISPLAY="Driver $DRV_NDAP"
+fi
+
+case $DRV_STATE in
+    0)  #stopped
+        trace 2 "  Running $DXCMD -user $USERNDAP -password $PASSWD -getstartoption $DRV_NDAP"
+        DXCMD_OUTPUT=`$DXCMD -user "$USERNDAP" -password "$PASSWD" -getstartoption "$DRV_NDAP" 2>$LOGFILE`
+        DRV_STARTMODE=$?
+        trace 2 "  DxCmd Output:"
+        trace 2 "$DXCMD_OUTPUT"
+        trace 2 "  Driver start mode: $DRV_STARTMODE"
+        if [ $DRV_STARTMODE = 0 ]; then
+            echo "$DRIVERDISPLAY is DISABLED${INVERTMSG}"
+            exit $STATE_OK
         else
-           dxml_drvstate=$STATE_OK
+            echo -n "$DRIVERDISPLAY is STOPPED${INVERTMSG}"
+                if [ "${INVERT}" = "true" ]; then
+                    DRV_STATE=$STATE_OK
+                elif [ $DRV_STARTMODE = 1 ]; then
+                    DRV_STATE=$STATE_WARNING
+            else
+                DRV_STATE=$STATE_CRITICAL
+            fi
         fi
         ;;
-    3)	#stopping
-	echo -n "Driver $driverdn is STOPPING...  ${INVERTMSG}"
-        dxml_drvstate=$STATE_WARNING
+    1)  #starting
+        echo -n "$DRIVERDISPLAY is STARTING..${INVERTMSG}"
+        DRV_STATE=$STATE_OK
         ;;
-   11)	#getting schema
-	echo -n "Driver $driverdn is GETTING the application SCHEMA...  ${INVERTMSG}"
-        dxml_drvstate=$STATE_OK
+    2)  #running
+        echo -n "$DRIVERDISPLAY is RUNNING${INVERTMSG}"
+        if [ "${INVERT}" = "true" ]; then
+           DRV_STATE=$STATE_CRITICAL
+        else
+           DRV_STATE=$STATE_OK
+        fi
         ;;
-   96)	#access forbidden
-	echo -n "Driver $driverdn could not be checked because $username is NOT AUTHORIZED to do so. "
-        dxml_drvstate=$STATE_CRITICAL
+    3)  #stopping
+        echo -n "$DRIVERDISPLAY is STOPPING..${INVERTMSG}"
+        DRV_STATE=$STATE_WARNING
         ;;
-  167)	#does not exist
-	echo -n "Driver $driverdn DOES NOT EXIST."
-        dxml_drvstate=$STATE_CRITICAL
+   11)  #getting schema
+        echo -n "$DRIVERDISPLAY is GETTING the application SCHEMA..${INVERTMSG}"
+        DRV_STATE=$STATE_OK
         ;;
-  255)	#generic error
-	echo -n "Driver $driverdn could not be checked due to an UNKNOWN ERROR (`egrep 'xception' $DXERR`)."
-        dxml_drvstate=$STATE_CRITICAL
+   96)  #access forbidden
+        echo -n "$DRIVERDISPLAY could not be checked because $USERNDAP is NOT AUTHORIZED to do so. "
+        DRV_STATE=$STATE_CRITICAL
         ;;
-    *)	#other dxcmd error
-	echo -n "Driver $driverdn could not be checked due to an UNKNOWN ERROR (Error code $dxml_drvstate)"
-        dxml_drvstate=$STATE_CRITICAL
+  167)  #does not exist
+        echo -n "$DRIVERDISPLAY DOES NOT EXIST."
+        DRV_STATE=$STATE_CRITICAL
+        ;;
+  255)  #generic error
+        echo -n "$DRIVERDISPLAY could not be checked due to an UNKNOWN ERROR (`egrep 'xception' $LOGFILE`)."
+        DRV_STATE=$STATE_CRITICAL
+        ;;
+    *)  #other dxcmd error
+        echo -n "$DRIVERDISPLAY could not be checked due to an UNKNOWN ERROR (Error code $DRV_STATE)"
+        DRV_STATE=$STATE_CRITICAL
         ;;
 esac
 
-if [ "$username" != "$usernameldap" ] && [ "$driverdn" != "$driverdnldap" ]; then
- 
+if [ "$USERNDAP" != "$USERLDAP" ] && [ "$DRV_NDAP" != "$DRV_LDAP" ]; then
+
+    if [ -x /usr/bin/ldapsearch ]; then
+        LDAPSRCH=/usr/bin/ldapsearch
+    else
+        LDAPSRCH=ldapsearch
+    fi
+
+    case "$LDAP_MODE" in
+        SSL)
+            LDAPSRCH="$LDAPSRCH -x -H ldaps://$SERVER:$LDAP_PORT"
+            ;;
+        CLEAR)
+            LDAPSRCH="$LDAPSRCH -x -h $SERVER -p $LDAP_PORT"
+            ;;
+        *)
+            LDAPSRCH="$LDAPSRCH -x -ZZ -h $SERVER -p $LDAP_PORT"
+            ;;
+    esac
+
+    trace 2 "Using: $LDAPSRCH"
+
     if [ "$TAOWARNING" != "" ] || [ "$TAOCRITICAL" != "" ]; then
+        trace 1
+        trace 1 "Checking TAO file size"
+        if [ "$TAODIR" != "" ]; then
 
-        #drivercn=`echo $driverdn | cut -d "." -f 1`
-        ENTRYID=`ldapsearch -x -Z -D "$usernameldap" -w "$password" -b "$driverdnldap" -s base localentryid | grep localEntryID: | cut -d " " -f 2`
-	TAOSIZE=`ls -l "$TAODIR/$ENTRYID.TAO" | sed -r "s/ +/ /g" | cut -d " " -f 5`
-	echo -n "$BR Cache file $TAODIR/$ENTRYID.TAO is $TAOSIZE bytes ($TAOWARNING/$TAOCRITICAL)."
+            trace 2 "  Running $LDAPSRCH -D $USERLDAP -w $PASSWD -b $DRV_LDAP -s base localentryid"
+            ENTRYID=`$LDAPSRCH -D "$USERLDAP" -w "$PASSWD" -b "$DRV_LDAP" -s base localentryid | grep localEntryID: | cut -d " " -f 2`
 
-        dxml_taostate=$STATE_OK
+            trace 1 "  TAO file:     $TAODIR/$ENTRYID.TAO"
+            TAOSIZE=`ls -l "$TAODIR/$ENTRYID.TAO" | sed -r "s/ +/ /g" | cut -d " " -f 5`
 
-        if [ "$TAOWARNING" != "" ] && [ $TAOSIZE -gt $TAOWARNING ]; then
-	    dxml_taostate=$STATE_WARNING
+            if [ "$OUTPUT" == "SHORT" ]; then
+                echo -en "${BR}${NL}Cache file is $TAOSIZE bytes ($TAOWARNING/$TAOCRITICAL)."
+            else
+                echo -en "${BR}${NL}Cache file $TAODIR/$ENTRYID.TAO is $TAOSIZE bytes ($TAOWARNING/$TAOCRITICAL)."
+            fi
+
+            TAO_STATE=$STATE_OK
+
+            if [ "$TAOWARNING" != "" ] && [ $TAOSIZE -gt $TAOWARNING ]; then
+                TAO_STATE=$STATE_WARNING
+            fi
+            if [ "$TAOCRITICAL" != "" ] && [ $TAOSIZE -gt $TAOCRITICAL ]; then
+                TAO_STATE=$STATE_CRITICAL
+            fi
+            if [ $TAO_STATE -gt $DRV_STATE ]; then
+                DRV_STATE=$TAO_STATE
+            fi
+        else
+            echo -en "${BR}${NL}No TAO files found, skipping check!"
+            TAO_STATE=$STATE_WARNING
         fi
-        if [ "$TAOCRITICAL" != "" ] && [ $TAOSIZE -gt $TAOCRITICAL ]; then
-    	    dxml_taostate=$STATE_CRITICAL
+    fi
+
+    if [ "$SIZEWARNING" != "" ] || [ "$SIZECRITICAL" != "" ] || [ "$AGEWARNING" != "" ] || [ "$AGECRITICAL" != "" ] || [ "$EVENTWARNING" != "" ] || [ "$EVENTCRITICAL" != "" ]; then
+        trace 1
+        trace 1 "Reading driver stats"
+
+        trace 2 "  Running $DXCMD -user "$USERNDAP" -password "$PASSWD" -getdriverstats "$DRV_NDAP" $STATFILE"
+        DXCMD_OUTPUT=`$DXCMD -user "$USERNDAP" -password "$PASSWD" -getdriverstats "$DRV_NDAP" $STATFILE 2>>$LOGFILE`
+        trace 2 "  DxCmd Output:"
+        trace 2 "$DXCMD_OUTPUT"
+        trace 2 "  Driver statistics:"
+        trace 2 "\n$(cat $STATFILE)"
+
+
+        if [ "$SIZEWARNING" != "" ] || [ "$SIZECRITICAL" != "" ]; then
+            trace 1
+            trace 1 "Checking cache size"
+
+            CACHESIZE=$(grep '<size>' $STATFILE | sed -e "s:.*<size>\(.*\)</size>.*:\1:")
+
+            echo -en "${BR}${NL}Cache size is $CACHESIZE bytes ($SIZEWARNING/$SIZECRITICAL)."
+
+            SIZE_STATE=$STATE_OK
+
+            if [ "$SIZEWARNING" != "" ] && [ $CACHESIZE -gt $SIZEWARNING ]; then
+                SIZE_STATE=$STATE_WARNING
+            fi
+            if [ "$SIZECRITICAL" != "" ] && [ $CACHESIZE -gt $SIZECRITICAL ]; then
+                SIZE_STATE=$STATE_CRITICAL
+            fi
+            if [ $SIZE_STATE -gt $DRV_STATE ]; then
+                DRV_STATE=$SIZE_STATE
+            fi
         fi
 
-        if [ $dxml_taostate -gt $dxml_drvstate ]; then
-    	    dxml_drvstate=$dxml_taostate
+        if [ "$AGEWARNING" != "" ] || [ "$AGECRITICAL" != "" ]; then
+            trace 1
+            trace 1 "Checking cache age"
+
+            CACHEAGE=$(grep '<oldest>' $STATFILE | sed -e "s:.*<oldest>\(.*\)</oldest>.*:\1:")
+
+            if [ ! -z "$CACHEAGE" ]; then
+              NOW=$(date +%s)
+              CACHEAGE=$(echo $CACHEAGE | sed -e "s|\(........\)\(..\)\(..\)\(..\).*|\1 \2:\3:\4 UTC|")
+              CACHEAGE=$(date +%s -d "$CACHEAGE")
+              CACHEAGE=$(expr $NOW - $CACHEAGE)
+            else
+              CACHEAGE=0
+            fi
+
+            echo -en "${BR}${NL}Cache age is $CACHEAGE seconds ($AGEWARNING/$AGECRITICAL)."
+
+            AGE_STATE=$STATE_OK
+
+            if [ "$AGEWARNING" != "" ] && [ $CACHEAGE -gt $AGEWARNING ]; then
+                AGE_STATE=$STATE_WARNING
+            fi
+            if [ "$AGECRITICAL" != "" ] && [ $CACHEAGE -gt $AGECRITICAL ]; then
+                AGE_STATE=$STATE_CRITICAL
+            fi
+            if [ $AGE_STATE -gt $DRV_STATE ]; then
+                DRV_STATE=$AGE_STATE
+            fi
         fi
+
+	# original event age difference checks by Joachim Plahl
+	# implemented but not advertised in this version, recommended to use --caw/--cac instead
+        if [ "$EVENTWARNING" != "" ] || [ "$EVENTCRITICAL" != "" ]; then
+            trace 1
+            trace 1 "Checking cached event age difference"
+
+            # parsing oldest and newest timestamp of status file. If no events are in the event cache, time is set to current time
+            OLD=$(cat $STATFILE | grep '<oldest>' | sed -e 's/\t\t\t\t//' | sed -e 's/<oldest>//' | sed -e 's/<\/oldest>//')
+            if [ ! -z "$OLD" ]; then
+                OLDTIME="${OLD:0:4}-${OLD:4:2}-${OLD:6:2} ${OLD:8:2}:${OLD:10:2}:${OLD:12:2} UTC"
+                OLDTIME=`date +%s -d "$OLDTIME"`
+            else
+                OLDTIME=`date +%s`
+            fi
+            NEW=$(cat $STATFILE | grep '<newest>' | sed -e 's/\t\t\t\t//' | sed -e 's/<newest>//' | sed -e 's/<\/newest>//')
+            if [ ! -z "$NEW" ]; then
+                NEWTIME="${NEW:0:4}-${NEW:4:2}-${NEW:6:2} ${NEW:8:2}:${NEW:10:2}:${NEW:12:2} UTC"
+                NEWTIME=`date +%s -d "$NEWTIME"`
+            else
+                NEWTIME=`date +%s`
+            fi
+
+            DIFFTIME=$(expr $NEWTIME - $OLDTIME)
+            #echo "DIFFTIME $DIFFTIME"
+
+            ETIME_STATE=$STATE_OK
+            if [ "$EVENTWARNING" != "" ] && [ $DIFFTIME -gt $EVENTWARNING ]; then
+                ETIME_STATE=$STATE_WARNING
+            fi
+
+            if [ "$EVENTCRITICAL" != "" ] && [ $DIFFTIME -gt $EVENTCRITICAL ]; then
+                ETIME_STATE=$STATE_CRITICAL
+            fi
+
+            if [ $ETIME_STATE -gt $DRV_STATE ]; then
+                DRV_STATE=$ETIME_STATE
+            fi
+            #echo "Event State: $ETIME_STATE"
+            #echo "Driver State: $DRV_STATE"
+        fi
+
+        rm -f $STATFILE
     fi
 
     if [ "$HBWARNING" != "" ] || [ "$HBCRITICAL" != "" ]; then
+        trace 1
+        trace 1 "Checking heartbeat"
+        trace 2 "  Running $LDAPSRCH -D $USERLDAP -w $PASSWD -b $DRV_LDAP -s base $HBATTR_LDAPNAME"
+        LHB=`$LDAPSRCH -D "$USERLDAP" -w "$PASSWD" -b "$DRV_LDAP" -s base $HBATTR_LDAPNAME | grep $HBATTR_LDAPNAME: | cut -d " " -f 2`
 
-	LHB=`ldapsearch -x -Z -D "$usernameldap" -w "$password" -b "$driverdnldap" -s base $HBATTR_LDAPNAME | grep $HBATTR_LDAPNAME: | cut -d " " -f 2`
-	LHB="${LHB:0:4}-${LHB:4:2}-${LHB:6:2} ${LHB:8:2}:${LHB:10:2}:${LHB:12:2} UTC"
-	#echo
-	#echo "Last Heartbeat: `date +"%Y-%m-%d %X %Z" -d "$LHB"`"
-        #echo "Now:            `date +"%Y-%m-%d %X %Z"`"
-        #echo "Last Heartbeat: `date +%s -d "$LHB"`"
-	#echo "Now:            `date +%s`"
 
-	let DIFF=`date +%s`-`date +%s -d "$LHB"`
-	echo -n "$BR Last Heartbeat occured $DIFF seconds ago at `date +"%Y-%m-%d %X %Z" -d "$LHB"` ($HBWARNING/$HBCRITICAL)."
+        if [ "$LHB" == "" ]; then
+            echo -en "${BR}${NL}Heartbeat has not been enabled or never occured or monitored yet."
+            let DIFF=$HBWARNING+1
+            trace 2
+        else
+            LHB="${LHB:0:4}-${LHB:4:2}-${LHB:6:2} ${LHB:8:2}:${LHB:10:2}:${LHB:12:2} UTC"
+            let DIFF=`date +%s`-`date +%s -d "$LHB"`
+            trace 2 "  Heartbeat: `date +%s -d "$LHB"` = `date +"%Y-%m-%d %X %Z" -d "$LHB"`"
+            trace 2 "  Now:       `date +%s` = `date +"%Y-%m-%d %X %Z"`"
 
-        dxml_hbstate=$STATE_OK
+            if [ "$OUTPUT" == "SHORT" ]; then
+                echo -en "${BR}${NL}Heartbeat occured $DIFF seconds ago ($HBWARNING/$HBCRITICAL)."
+            else
+                echo -en "${BR}${NL}Heartbeat occured $DIFF seconds ago at `date +"%Y-%m-%d %X %Z" -d "$LHB"` ($HBWARNING/$HBCRITICAL)."
+            fi
+        fi
+
+        HB_STATE=$STATE_OK
 
         if [ "$HBWARNING" != "" ] && [ $DIFF -gt $HBWARNING ]; then
-	    dxml_hbstate=$STATE_WARNING
+            HB_STATE=$STATE_WARNING
         fi
         if [ "$HBCRITICAL" != "" ] && [ $DIFF -gt $HBCRITICAL ]; then
-    	    dxml_hbstate=$STATE_CRITICAL
+            HB_STATE=$STATE_CRITICAL
         fi
-
-        if [ $dxml_hbstate -gt $dxml_drvstate ]; then
-    	    dxml_drvstate=$dxml_hbstate
+        if [ $HB_STATE -gt $DRV_STATE ]; then
+            DRV_STATE=$HB_STATE
         fi
     fi
+
+    if [ "$TJWARNING" != "" ] || [ "$TJCRITICAL" != "" ]; then
+        trace 1
+        trace 1 "Checking trigger job"
+        trace 2 "  Running $LDAPSRCH -D $USERLDAP -w $PASSWD -b $DRV_LDAP -s base $TJATTR_LDAPNAME"
+        LTJ=`$LDAPSRCH -D "$USERLDAP" -w "$PASSWD" -b "$DRV_LDAP" -s base $TJATTR_LDAPNAME | grep $TJATTR_LDAPNAME: | cut -d " " -f 2`
+
+
+        if [ "$LTJ" == "" ]; then
+            echo -en "${BR}${NL}Trigger job has not been enabled or never run or monitored yet."
+            let DIFF=$TJWARNING+1
+            trace 2
+        else
+            LTJ="${LTJ:0:4}-${LTJ:4:2}-${LTJ:6:2} ${LTJ:8:2}:${LTJ:10:2}:${LTJ:12:2} UTC"
+            let DIFF=`date +%s`-`date +%s -d "$LTJ"`
+            trace 2 "  Trigger:   `date +%s -d "$LTJ"` = `date +"%Y-%m-%d %X %Z" -d "$LTJ"`"
+            trace 2 "  Now:       `date +%s` = `date +"%Y-%m-%d %X %Z"`"
+
+            if [ "$OUTPUT" == "SHORT" ]; then
+                echo -en "${BR}${NL}Trigger job ran $DIFF seconds ago ($TJWARNING/$TJCRITICAL)."
+            else
+                echo -en "${BR}${NL}Trigger job ran $DIFF seconds ago at `date +"%Y-%m-%d %X %Z" -d "$LTJ"` ($TJWARNING/$TJCRITICAL)."
+            fi
+        fi
+
+        TJ_STATE=$STATE_OK
+
+        if [ "$TJWARNING" != "" ] && [ $DIFF -gt $TJWARNING ]; then
+            TJ_STATE=$STATE_WARNING
+        fi
+        if [ "$TJCRITICAL" != "" ] && [ $DIFF -gt $TJCRITICAL ]; then
+            TJ_STATE=$STATE_CRITICAL
+        fi
+        if [ $TJ_STATE -gt $DRV_STATE ]; then
+            DRV_STATE=$TJ_STATE
+        fi
+    fi
+
 fi
 
 echo
-exit $dxml_drvstate
+trace 1 "--- END logging at `date +'%F %T'` -------------------------------------------------------------"
+exit $DRV_STATE
