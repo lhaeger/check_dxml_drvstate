@@ -1,5 +1,4 @@
-Novell DirXML 1.1 and Identity Manager 2.x/3.x/4.x driver state detector 
-plugin for Nagios. Basically a wrapper for "dxcmd -getstate". 
+Novell DirXML 1.1 and Micro Focus (formerly NetIQ) Identity Manager 2.x/3.x/4.x driver state detector plugin for Nagios and Icinga - basically a wrapper for "dxcmd -getstate".
 
 
     Usage: check_dxml_drvstate [-s <server>] -u <username>, -p <password> -d <driver-dn> [-i] [--tw <warnsize> --tc <criticalsize> [--tree <treename>]]
@@ -10,9 +9,10 @@ plugin for Nagios. Basically a wrapper for "dxcmd -getstate".
       -s, --server     DirXML/IDM server IP or hostname, e.g. 127.0.0.1 or myserver.mydomain.org.
                        Leave out this option to check drivers running on the same machine as nrpe.
           --edirport   eDirectory (NCP) port. Defaults to 524 if not specified.
-          --ldapmode   TLS, SSL or CLEAR. Defaults to TLS if not specified
-          --ldapport   LDAP port. Defaults to 636 if not specified and LDAP mode is SSL.
-                       Defaults to 389 if not specified and LDAP mode is TLS or CLEAR.
+          --ldapmode   TLS, SSL or CLEAR. Defaults to TLS (=StartTLS on LDAP cleartext port) if not specified.
+          --ldapport   LDAP port. Defaults to 636 if not specified and LDAP mode is SSL (which 
+                       includes TLS 1.0 and higher on secure LDAP port if your IDM version support it).
+                       Defaults to 389 if not specified and LDAP mode is (Start)TLS or CLEAR.
       -u, --username   Account used to check driver state, ldap typed syntax, e.g. cn=admin,o=novell
       -p, --password   Password in cleartext (good reason to use a restriced account :-)
       -d, --driver     Driver to check, ldap typed syntax, cn=drv_test,cn=my_driverset,o=system
