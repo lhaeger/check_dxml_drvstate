@@ -54,7 +54,58 @@ Novell DirXML 1.1 and Micro Focus (formerly NetIQ) Identity Manager 2.x/3.x/4.x 
       -l, --logfile    Logfile to write debug messages to instead of default
       -o, --overwrite  Overwrite log file on each run
       -h, -?, --help   This help screen
-    
+
+History:
+
+    v1.0,  2006-04-10, initial release
+    v1.1,  2007-05-21, added support for IDM 3.5 and more detailed return messages
+    v1.2,  2007-07-31, added support for edir 8.8
+                       new command line option "-i" to invert return codes of running and
+                       stopped drivers. This is meant to help monitoring usually inactive
+                       backup servers associated to a driver set.
+                       all changes in v1.2 based on enhancements by Rainer Brunold, many thanks!
+    v1.3,  2007-12-05, added TAO file size monitoring
+                       username must now be ldap typed (for TAO file size monitoring)
+                       take driver startup mode into consideration when driver not running:
+                       disabled -> STATE_OK,
+                       manual   -> STATE_WARNING
+                       auto     -> STATE_CRITICAL
+                       added long command line options
+    v1.4,  2008-01-22, added heartbeat monitoring, requires a schema extension (aux class), driver
+                        heartbeat and a special policy on the drive
+                        new command line option --br to add html line breaks to text output
+                        text output now shows warning/critical values for TAO file size and
+                        heartbeat monitoring
+    v1.5,  2008-08-26, added -Z parameter to ldapsearchs
+                       improved TAO filesize determination for various "ls -l" output styles
+    v1.6,  2008-09-01, fixed wrong $TAODIR for Edir 8.8x
+    v1.7,  2009-03-12, added --nl parameter
+                       minor bug fixes and cosmetics
+    v1.6d, 2010-10-25, fixed TAO file finding logic for multi-instance eDirectory 8.8
+                       changed ldapsearch calls from "-Z" to "-H ldaps://"
+                       (David's branch)
+    v1.7d, 2010-10-28, added optional port specifiers for eDirectory (524), LDAP (389), and
+                       LDAPS (636) to allow non-default configurations to be monitored.
+                       (David's branch)
+    v1.8,  2010-11-10, merged David's and my branch
+                       added --ldapmode, --ldapport and --edirport parameters based on David's
+                       idea and original code
+                       added -v, -vv and --verbose parameters, output is logged to /var/log/<scriptname>.log
+                       added --short option
+                       try to force use of openldap's ldapsearch to help avoid a bug in
+                       Novell's ldapsearch implementation when using the -Z switch
+                       minor bug fixes, code streamlining and trace cosmetics
+    v1.9,  2010-11-21, rewrote the code to find edir tools and dib folder
+                       added --bindir, --logfile, -l parameters
+    v1.6j, 2012-04-26  Event Time checking added by <jplahl@novell.com>
+                       (Joachim's branch)
+    v2.0,  2012-07-29  merged Joachim's and my branch
+                       added -o parameter to overwrite log file on each run
+                       added --csw/--csc/--caw/--cac parameters
+    v2.1,  2014-03-18  added --tjw/--tjc/--tjattr parameters
+                       changed default heartbeat attr
+                       added --ldaponly parameter (not yet implemented) 
+
 Many thanks to David Gersic for adding multi-instance edir support, basic HA cluster support, custom LDAP/NDAP port parameters and more.
 
 And to Joachim Plahl <jplahl@novell.com> for the original event time checking code and pointing my nose on using dxcmd stats to finally support remote cache age and size checks.
