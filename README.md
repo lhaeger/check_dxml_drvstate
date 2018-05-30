@@ -50,6 +50,7 @@ Novell DirXML 1.1 and Micro Focus (formerly NetIQ) Identity Manager 2.x/3.x/4.x 
           --br         Add <br> tags to output for better readability in HTML display
           --nl         Add line breaks to output for better readability in console/file output
           --bindir     Directory where dxcmd and ndsconfig binaries are located
+          --perfdata   Append performance data to the output, so nagios can draw pretty graphs (e.g. <default output> | cache_age=42s;600;1800)
       -v, --verbose    Verbose output, -vv writes extra debug messages to /var/log/check_dxml_drvstate.log
       -l, --logfile    Logfile to write debug messages to instead of default
       -o, --overwrite  Overwrite log file on each run
@@ -105,6 +106,7 @@ History:
     v2.1,  2014-03-18  added --tjw/--tjc/--tjattr parameters
                        changed default heartbeat attr
                        added --ldaponly parameter (not yet implemented) 
+    v2.1.1,2018-05-30  added --perfdata parameter for nagios performance data (Iwer Petersen)
 
 Many thanks to David Gersic for adding multi-instance edir support, basic HA cluster support, custom LDAP/NDAP port parameters and more.
 

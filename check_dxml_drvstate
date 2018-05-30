@@ -50,9 +50,12 @@
 # v2.1,  2014-03-18  added --tjw/--tjc/--tjattr parameters
 #                    changed default heartbeat attr
 #                    added --ldaponly parameter (not yet implemented) 
+# v2.1.1,2018-05-30  added --perfdata parameter for nagios performance data
+#
+#
 
 
-VERSION="2.1, 2014-03-18"
+VERSION="2.1.1, 2018-05-30"
 
 PROGNAME=`basename $0`
 CMDLINE="$0 $*"
@@ -86,6 +89,8 @@ EDIR_PORT=524
 LDAP_MODE=TLS
 LDAP_PORT=
 LDAP_ONLY=false
+
+PERFDATA=false
 
 LOGFILE="/var/log/$PROGNAME.log"
 OVERWRITE=false
@@ -150,6 +155,7 @@ print_help() {
                 --br         Add <br> tags to output for better readability in HTML display
                 --nl         Add line breaks to output for better readability in console/file output
                 --bindir     Directory where dxcmd and ndsconfig binaries are located
+                --perfdata   Append performance data to the output, so nagios can draw pretty graphs (e.g. ... | cache_age=42s)               
             -v, --verbose    Verbose output, -vv writes extra debug messages to $LOGFILE
             -l, --logfile    Logfile to write debug messages to instead of default
             -o, --overwrite  Overwrite log file on each run
@@ -285,6 +291,9 @@ while test -n "$1"; do
         --ldaponly)
             LDAP_ONLY=true
             ;;
+        --perfdata)
+	    PERFDATA=true
+	    ;;
         --verbose|-v)
             TRACE_LEVEL=1
             ;;
@@ -473,11 +482,19 @@ if [ "$USERNDAP" != "$USERLDAP" ] && [ "$DRV_NDAP" != "$DRV_LDAP" ]; then
             trace 1 "  TAO file:     $TAODIR/$ENTRYID.TAO"
             TAOSIZE=`ls -l "$TAODIR/$ENTRYID.TAO" | sed -r "s/ +/ /g" | cut -d " " -f 5`
 
-            if [ "$OUTPUT" == "SHORT" ]; then
-                echo -en "${BR}${NL}Cache file is $TAOSIZE bytes ($TAOWARNING/$TAOCRITICAL)."
-            else
-                echo -en "${BR}${NL}Cache file $TAODIR/$ENTRYID.TAO is $TAOSIZE bytes ($TAOWARNING/$TAOCRITICAL)."
-            fi
+            if [ "${PERFDATA}" == "true" ]; then
+                if [ "$OUTPUT" == "SHORT" ]; then
+                    echo -en "${BR}${NL}Cache file is $TAOSIZE bytes ($TAOWARNING/$TAOCRITICAL).|tao_size=${TAOSIZE}B;${TAOWARNING};${TAOCRITICAL}"
+                else
+                    echo -en "${BR}${NL}Cache file $TAODIR/$ENTRYID.TAO is $TAOSIZE bytes ($TAOWARNING/$TAOCRITICAL).|tao_size=${TAOSIZE}B;${TAOWARNING};${TAOCRITICAL}"
+                fi
+	    else
+                if [ "$OUTPUT" == "SHORT" ]; then
+                    echo -en "${BR}${NL}Cache file is $TAOSIZE bytes ($TAOWARNING/$TAOCRITICAL)."
+                else
+                    echo -en "${BR}${NL}Cache file $TAODIR/$ENTRYID.TAO is $TAOSIZE bytes ($TAOWARNING/$TAOCRITICAL)."
+                fi
+	    fi
 
             TAO_STATE=$STATE_OK
 
@@ -514,7 +531,11 @@ if [ "$USERNDAP" != "$USERLDAP" ] && [ "$DRV_NDAP" != "$DRV_LDAP" ]; then
 
             CACHESIZE=$(grep '<size>' $STATFILE | sed -e "s:.*<size>\(.*\)</size>.*:\1:")
 
-            echo -en "${BR}${NL}Cache size is $CACHESIZE bytes ($SIZEWARNING/$SIZECRITICAL)."
+            if [ "${PERFDATA}" = "true" ]; then
+                echo -en "${BR}${NL}Cache size is $CACHESIZE bytes ($SIZEWARNING/$SIZECRITICAL).|cache_size=${CACHESIZE}B;${SIZEWARNING};${SIZECRITICAL}"
+            else
+                echo -en "${BR}${NL}Cache size is $CACHESIZE bytes ($SIZEWARNING/$SIZECRITICAL)."
+            fi
 
             SIZE_STATE=$STATE_OK
 
@@ -543,8 +564,12 @@ if [ "$USERNDAP" != "$USERLDAP" ] && [ "$DRV_NDAP" != "$DRV_LDAP" ]; then
             else
               CACHEAGE=0
             fi
-
-            echo -en "${BR}${NL}Cache age is $CACHEAGE seconds ($AGEWARNING/$AGECRITICAL)."
+	    
+	    if [ "${PERFDATA}" = "true" ]; then
+                echo -en "${BR}${NL}Cache age is $CACHEAGE seconds ($AGEWARNING/$AGECRITICAL).|cache_age=${CACHEAGE}s;${AGEWARNING};${AGECRITICAL}"
+            else
+                echo -en "${BR}${NL}Cache age is $CACHEAGE seconds ($AGEWARNING/$AGECRITICAL)."
+            fi
 
             AGE_STATE=$STATE_OK
 
