@@ -8,11 +8,11 @@ type: Plugin
 license: gplv3
 releases: 
   - 
-    name: v2.1
-    description: "2.1 Release"
+    name: v2.2
+    description: "2.2 Release"
     files: 
       - 
         name: check_dxml_drvstate
         url: "file:///check_dxml_drvstate"
         description: "Current release"
-        checksum: 96038d61273f947ab353d24ed0f5bbb3
+        checksum: CF46AF663CB27B8B540311397B911741                  
