@@ -312,11 +312,12 @@ while test -n "$1"; do
     shift
 done
 
-
-if [ "$LDAP_PORT" == "" ] && [ "$LDAP_MODE" == "SSL" ]; then
-    LDAP_PORT=636
-else
-    LDAP_PORT=389
+if [ "$LDAP_PORT" == "" ]; then
+    if [ "$LDAP_MODE" == "SSL" ]; then
+        LDAP_PORT=636
+    else
+        LDAP_PORT=389
+    fi
 fi
 
 USERNDAP=$(echo $USERLDAP | sed -r "s/(,)?[^,=]+=/\1/g; s/,/./g")
