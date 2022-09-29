@@ -116,4 +116,7 @@ And to Joachim Plahl <jplahl@novell.com> for the original event time checking co
 
 Thanks a lot to Iwer Peterson for adding support for Nagios performance data
 
-Please report bugs to <lothar.haeger@is4it.de>.
+Please report bugs to <lothar.haeger@is4it.de>. 
+
+
+If you want to suppport this project [buy me a coffee](https://www.buymeacoffee.com/lhaeger)!
